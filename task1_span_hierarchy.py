@@ -1,18 +1,8 @@
 import time
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from tracer_setup import tracer, provider
 from llm_call import llm_call
 from tools import tool_syntax_inspector
-
-resource = Resource.create({"service.name": "non-determinism-catcher"})
-provider = TracerProvider(resource=resource)
-otlp_exporter = OTLPSpanExporter(endpoint="http://localhost:4317", insecure=True)
-provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
-trace.set_tracer_provider(provider)
-tracer = trace.get_tracer("harness.task1")
+from config import PROMPT
 
 
 def run_test_harness():
@@ -22,15 +12,15 @@ def run_test_harness():
         run_span.set_attribute("timestamp", time.time())
 
         with tracer.start_as_current_span("prompt_build") as build_span:
-            prompt = "What is the Square Root of 49? Answer in one short sentence."
             build_span.set_attribute("prompt_template_id", "extract_v1")
-            build_span.set_attribute("input_hash", str(hash(prompt)))
+            build_span.set_attribute("input_hash", str(hash(PROMPT)))
 
-        output = llm_call(prompt)
+        output = llm_call(PROMPT)
 
         with tracer.start_as_current_span("parse_validate") as parse_span:
-            structure_score = tool_syntax_inspector(output)
-            parse_span.set_attribute("schema_valid", int(structure_score))
+            result = tool_syntax_inspector(output)  # CHANGED: now a dict
+            parse_span.set_attribute("schema_valid", int(result["structure_score"]))
+            parse_span.set_attribute("can_answer", result["can_answer"])
 
 
 if __name__ == "__main__":

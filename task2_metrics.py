@@ -1,34 +1,10 @@
-"""
-task2_metrics.py — runs N test iterations, using REAL checks, real metrics.
-"""
-
-import time
 import statistics
-from tracer_setup import (
-    tracer,
-    schema_validity_counter,
-    task_success_counter,
-    variance_histogram,
-    provider,
-    meter_provider,
-)
-from tools import tool_syntax_inspector
+from tracer_setup import tracer, provider, meter_provider, variance_histogram
+from llm_call import llm_call
+from tools import tool_syntax_inspector, tool_similarity_ranker
+from config import PROMPT, BASELINE, N_RUNS
 
-N_RUNS = 5
-similarity_scores_this_batch = []  # collect for real variance calc
-
-
-def fake_llm_call(run_number: int) -> str:
-    # TODO: replace with real LLM call (Ollama/Gemini) when ready
-    # returning different outputs to simulate real variation
-    outputs = [
-        '{"answer": 7}',
-        '{"answer": 7}',
-        'the answer is seven',       # structurally broken on purpose
-        '{"answer": 7}',
-        '{"answer": "7"}',
-    ]
-    return outputs[run_number % len(outputs)]
+structure_scores_this_batch = []
 
 
 def run_one_test(run_index: int):
@@ -38,20 +14,19 @@ def run_one_test(run_index: int):
         run_span.set_attribute("prompt_version", "v1.0")
 
         with tracer.start_as_current_span("prompt_build"):
-            time.sleep(0.05)
+            pass
 
-        with tracer.start_as_current_span("llm_call"):
-            output = fake_llm_call(run_index)
-            time.sleep(0.1)
+        output = llm_call(PROMPT)
 
         with tracer.start_as_current_span("parse_validate") as parse_span:
-            structure_score = tool_syntax_inspector(output)
-            parse_span.set_attribute("schema_valid", structure_score)
+            result = tool_syntax_inspector(output)
+            similarity = tool_similarity_ranker(output, BASELINE)
 
-            schema_validity_counter.add(int(structure_score), {"prompt_version": "v1.0"})
-            task_success_counter.add(int(structure_score), {"prompt_version": "v1.0"})
+            parse_span.set_attribute("schema_valid", int(result["structure_score"]))
+            parse_span.set_attribute("can_answer", result["can_answer"])
+            parse_span.set_attribute("similarity_score", similarity)
 
-            similarity_scores_this_batch.append(structure_score)
+            structure_scores_this_batch.append(result["structure_score"])
 
 
 def run_batch():
@@ -59,8 +34,8 @@ def run_batch():
     for i in range(N_RUNS):
         run_one_test(run_index=i)
 
-    if len(similarity_scores_this_batch) > 1:
-        real_variance = statistics.stdev(similarity_scores_this_batch)
+    if len(structure_scores_this_batch) > 1:
+        real_variance = statistics.stdev(structure_scores_this_batch)
     else:
         real_variance = 0.0
 

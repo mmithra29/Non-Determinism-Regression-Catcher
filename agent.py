@@ -1,7 +1,8 @@
 import os
 from google import genai
 from google.genai import types
-from metrics_setup import meter_provider
+from tracer_setup import tracer, provider, meter_provider
+from config import PROMPT, BASELINE
 from tracer_setup import tracer, provider
 from tools import tool_similarity_ranker, tool_syntax_inspector
 from dotenv import load_dotenv
@@ -48,8 +49,7 @@ from llm_call import llm_call
 
 if __name__ == "__main__":
     print("Running target LLM...")
-    prompt = "What is the Square Root of 49? Answer in one short sentence."
-    actual_output = llm_call(prompt)
+    actual_output = llm_call(PROMPT)
     print("LLM said:", actual_output)
 
     baseline = "The Square Root of 49 is 7"
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     print("Running evaluation agent...")
     output = run_evaluation_agent(
         actual_text=actual_output,
-        baseline_text=baseline,
+        baseline_text=BASELINE,
     )
     print("\nAgent result:\n", output)
 
