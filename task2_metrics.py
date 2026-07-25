@@ -1,76 +1,75 @@
+"""
+task2_metrics.py — runs N test iterations, using REAL checks, real metrics.
+"""
+
 import time
-from opentelemetry import trace, metrics
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-
-# NEW IMPORTS FOR METRICS
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-
-# 1. Setup Resource (Shared by both Traces and Metrics)
-resource = Resource.create({"service.name": "non-determinism-catcher"})
-
-# 2. Setup Traces (Exactly the same as Task 1)
-trace_provider = TracerProvider(resource=resource)
-trace_exporter = OTLPSpanExporter(endpoint="http://localhost:4317", insecure=True)
-trace_provider.add_span_processor(BatchSpanProcessor(trace_exporter))
-trace.set_tracer_provider(trace_provider)
-tracer = trace.get_tracer("harness.task2")
-
-# 3. Setup Metrics (NEW)
-metric_exporter = OTLPMetricExporter(endpoint="http://localhost:4317", insecure=True)
-metric_reader = PeriodicExportingMetricReader(metric_exporter)
-meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
-metrics.set_meter_provider(meter_provider)
-meter = metrics.get_meter("harness.task2")
-
-# 4. Define Custom Metrics (NEW)
-# Counters just add up numbers (great for counting how many times a test passed)
-schema_validity_counter = meter.create_counter(
-    "schema_valid_metric",
-    description="Tracks if the output schema is valid (1=pass)"
+import statistics
+from tracer_setup import (
+    tracer,
+    schema_validity_counter,
+    task_success_counter,
+    variance_histogram,
+    provider,
+    meter_provider,
 )
-task_success_counter = meter.create_counter(
-    "task_success_metric",
-    description="Tracks if the task was successful (1=pass)"
-)
-# Histograms track distributions (great for measuring variance or latency)
-variance_histogram = meter.create_histogram(
-    "variance_score",
-    description="Tracks the variance/drift score of the LLM output"
-)
+from tools import tool_syntax_inspector
 
-def run_test_harness():
+N_RUNS = 5
+similarity_scores_this_batch = []  # collect for real variance calc
+
+
+def fake_llm_call(run_number: int) -> str:
+    # TODO: replace with real LLM call (Ollama/Gemini) when ready
+    # returning different outputs to simulate real variation
+    outputs = [
+        '{"answer": 7}',
+        '{"answer": 7}',
+        'the answer is seven',       # structurally broken on purpose
+        '{"answer": 7}',
+        '{"answer": "7"}',
+    ]
+    return outputs[run_number % len(outputs)]
+
+
+def run_one_test(run_index: int):
+    run_id = f"run-{run_index:03d}"
     with tracer.start_as_current_span("test_run") as run_span:
         run_span.set_attribute("run_id", run_id)
         run_span.set_attribute("prompt_version", "v1.0")
-        
+
         with tracer.start_as_current_span("prompt_build"):
-            time.sleep(0.1) 
-            
+            time.sleep(0.05)
+
         with tracer.start_as_current_span("llm_call"):
-            time.sleep(0.5) 
-            
-        with tracer.start_as_current_span("parse_validate") as parse_span:
-            is_valid = 1 
-            parse_span.set_attribute("schema_valid", is_valid)
-            
-            # --- EMIT METRICS HERE ---
-            # We record a '1' because it passed, and tag it with the prompt version
-            schema_validity_counter.add(is_valid, {"prompt_version": "v1.0"})
-            task_success_counter.add(1, {"prompt_version": "v1.0"})
-            # Simulating a variance/drift score (e.g., 0.05 drift)
-            variance_histogram.record(0.05, {"prompt_version": "v1.0"})
+            output = fake_llm_call(run_index)
             time.sleep(0.1)
 
+        with tracer.start_as_current_span("parse_validate") as parse_span:
+            structure_score = tool_syntax_inspector(output)
+            parse_span.set_attribute("schema_valid", structure_score)
+
+            schema_validity_counter.add(int(structure_score), {"prompt_version": "v1.0"})
+            task_success_counter.add(int(structure_score), {"prompt_version": "v1.0"})
+
+            similarity_scores_this_batch.append(structure_score)
+
+
+def run_batch():
+    print(f"Running {N_RUNS} test iterations...")
+    for i in range(N_RUNS):
+        run_one_test(run_index=i)
+
+    if len(similarity_scores_this_batch) > 1:
+        real_variance = statistics.stdev(similarity_scores_this_batch)
+    else:
+        real_variance = 0.0
+
+    variance_histogram.record(real_variance, {"prompt_version": "v1.0"})
+    print(f"Batch variance (stddev): {real_variance:.4f}")
+
+
 if __name__ == "__main__":
-    print("Starting test run with METRICS...")
-    run_test_harness()
-    
-    # Force flush both to ensure they send before the script closes
-    trace_provider.force_flush()
+    run_batch()
+    provider.force_flush()
     meter_provider.force_flush()
-    print("Task 2 complete! Traces AND Metrics sent to SigNoz.")
+    print("Batch complete. Real traces + real metrics sent to SigNoz.")
