@@ -14,10 +14,7 @@ N_RUNS = 5
 BASELINE_ANSWER = '{"can_answer": 1, "answer": "7"}'
 
 PROMPT = (
-    "What is the Square Root of 49? "
-    'Respond ONLY with valid JSON in this exact format: '
-    '{"can_answer": 1, "answer": "<value>"}. '
-    "Do not include any text outside the JSON."
+    "What is the Square Root of 49? Just chat casually, no specific format needed."
 )
 
 structure_scores_this_batch = []
